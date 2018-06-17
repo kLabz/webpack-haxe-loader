@@ -42,60 +42,63 @@ module.exports = function(hxmlContent) {
         jsTempFile
     );
 
-    registerDependencies(context, options, classpath);
+    getClasspath(args, classpath)
+    .then(classpath => {
+        registerDependencies(context, options, classpath);
 
-    // Execute the Haxe build.
-    const haxeCommand = `haxe ${args.join(' ')}`;
-    if (options.logCommand) console.log(haxeCommand);
-    exec(haxeCommand, (err, stdout, stderr) => {
-        // Parse errors and warnings
-        if (stderr) {
-            let errorIndex = 0;
-            const lines = stderr.split('\n');
+        // Execute the Haxe build.
+        const haxeCommand = `haxe ${args.join(' ')}`;
+        if (options.logCommand) console.log(haxeCommand);
+        exec(haxeCommand, (err, stdout, stderr) => {
+            // Parse errors and warnings
+            if (stderr) {
+                let errorIndex = 0;
+                const lines = stderr.split('\n');
 
-            lines.forEach(line => {
-                if (!line || !identifyError(line)) return;
-                const err = new Error(line);
+                lines.forEach(line => {
+                    if (!line || !identifyError(line)) return;
+                    const err = new Error(line);
 
-                if (problemMatcher.test(line) && problemMatcher.exec(line)[6] === 'Warning') {
-                    if (!options.ignoreWarnings) {
+                    if (problemMatcher.test(line) && problemMatcher.exec(line)[6] === 'Warning') {
+                        if (!options.ignoreWarnings) {
+                            Object.assign(err, {index: ++errorIndex});
+                            context.emitWarning(err);
+                        }
+                    } else {
                         Object.assign(err, {index: ++errorIndex});
-                        context.emitWarning(err);
+                        context.emitError(err);
                     }
-                } else {
-                    Object.assign(err, {index: ++errorIndex});
-                    context.emitError(err);
-                }
-            });
-        }
+                });
+            }
 
-        if (stdout && options.emitStdoutAsWarning) {
-            context.emitWarning(new Error('[HAXE STDOUT]\n' + stdout));
-        }
+            if (stdout && options.emitStdoutAsWarning) {
+                context.emitWarning(new Error('[HAXE STDOUT]\n' + stdout));
+            }
 
-        // Fail if haxe compilation failed
-        if (err) {
-            return cb(makeError('Compilation failed', haxeCommand));
-        }
+            // Fail if haxe compilation failed
+            if (err) {
+                return cb(makeError('Compilation failed', haxeCommand));
+            }
 
-        // If the hxml file outputs something other than client JS, we should not include it in the bundle.
-        // We're only passing it through webpack so that we get `watch` and the like to work.
-        if (!jsOutputFile) {
-            // We allow the user to configure a timeout so the server has a chance to restart before webpack triggers a page refresh.
-            var delay = options.delayForNonJsBuilds || 0;
-            setTimeout(() => {
-                // We will include a random string in the output so that the dev server notices a difference and triggers a page refresh.
-                cb(null, '// ' + Math.random());
-            }, delay);
-            return;
-        }
+            // If the hxml file outputs something other than client JS, we should not include it in the bundle.
+            // We're only passing it through webpack so that we get `watch` and the like to work.
+            if (!jsOutputFile) {
+                // We allow the user to configure a timeout so the server has a chance to restart before webpack triggers a page refresh.
+                var delay = options.delayForNonJsBuilds || 0;
+                setTimeout(() => {
+                    // We will include a random string in the output so that the dev server notices a difference and triggers a page refresh.
+                    cb(null, '// ' + Math.random());
+                }, delay);
+                return;
+            }
 
-        // Read the resulting JS file and return the main module
-        const processed = processOutput(ns, jsTempFile, jsOutputFile, options);
-        if (processed) {
-            updateCache(context, ns, processed, classpath);
-        }
-        returnModule(context, ns, null /* entry point */, cb);
+            // Read the resulting JS file and return the main module
+            const processed = processOutput(ns, jsTempFile, jsOutputFile, options);
+            if (processed) {
+                updateCache(context, ns, processed, classpath);
+            }
+            returnModule(context, ns, null /* entry point */, cb);
+        });
     });
 };
 
@@ -154,7 +157,7 @@ function getSystemPath(path) {
 }
 
 function returnModule(context, ns, name, cb) {
-    const { results, classpath } = cache[ns];
+    const { results } = cache[ns];
     if (!results.length) {
         throw new Error(`${ns}.hxml did not emit any modules`);
     }
@@ -348,4 +351,21 @@ function prepare(options, context, ns, hxmlContent, jsTempFile) {
     }
 
     return { jsOutputFile, classpath, args };
+}
+
+function getClasspath(args, fallback) {
+    // Do not use compilation server here
+    const filteredArgs = args.filter(a => !a.startsWith('--connect'));
+
+    return new Promise((resolve) => {
+        exec(`haxe --macro "CliTools.getClasspath()" ${filteredArgs.join(' ')}`, (err, stdout, stderr) => {
+            if (err) resolve(fallback);
+
+            const classpath = stdout.split("\n")
+                .filter(l => l.startsWith('path: '))
+                .map(l => l.substring(6)); // 'path: '.length
+
+            resolve(classpath);
+        });
+    });
 }
