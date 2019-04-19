@@ -359,12 +359,11 @@ function getClasspath(args, fallback) {
 
     return new Promise((resolve) => {
         exec(`haxe --macro "CliTools.getClasspath()" ${filteredArgs.join(' ')}`, (err, stdout, stderr) => {
-            if (err) resolve(fallback);
-
             const classpath = stdout.split("\n")
                 .filter(l => l.startsWith('path: '))
                 .map(l => l.substring(6)); // 'path: '.length
 
+            if (classpath.length == 0) return resolve(fallback);
             resolve(classpath);
         });
     });
